@@ -1,201 +1,240 @@
-# Методы кластерного анализа в экспертных системах
+# Исследование сети Хопфилда для распознавания зашумленных образов
 
-**Лабораторная работа №4 — Базы знаний и поддержка принятия решений**
+**Лабораторная работа №5 — Базы знаний и поддержка принятия решений**
 
-**Цель работы:** Изучение методов и алгоритмов автоматического разделения множества объектов на кластеры, программная реализация алгоритмов кластеризации методом K-средних и методом максимина, а также оценка их вычислительной сложности.
+**Цель работы:** Исследование свойств ассоциативной памяти искусственной нейронной сети Хопфилда, программная реализация обучения синаптических весов по правилу Хебба и анализ устойчивости сети к зашумлению входных образов в диапазоне от 10% до 100%.
 
 ## Описание задачи и теоретическая база
 
-Методы кластерного анализа предназначены для разделения множества анализируемых объектов $X_1, X_2, \dots, X_N$, каждый из которых описывается вектором из $M$ признаков $X_j = (X_{1j}, X_{2j}, \dots, X_{Mj})$, на группы (кластеры) со сходными характеристиками. В данной работе реализовано два классических алгоритма кластеризации:
-
-1. **Метод K-средних (K-Means):**
-   Разделяет выборку на заранее заданное число кластеров $K$. Итеративно пересчитывает центры тяжести (объекты-прототипы $P_k^s$) каждого кластера как среднее арифметическое входящих в него объектов:
-   $$P_k^s = \frac{1}{\vert{}C_k\vert{}} \sum_{X_j \in C_k} X_j$$
-   Каждый объект относится к кластеру с ближайшим по евклидову расстоянию прототипом. Процесс продолжается до тех пор, пока координаты прототипов не перестанут изменяться на двух соседних итерациях ($P_k^s = P_k^{s-1}$).
-
-2. **Метод максимина (Maximin):**
-   Автоматически определяет необходимое количество кластеров $K$ на основе структуры данных. Первым прототипом $P_1$ выбирается произвольный объект, вторым $P_2$ — наиболее удаленный от него. На каждом шаге объекты распределяются по текущим прототипам, находятся наиболее удаленные объекты $Y_k$ внутри каждого кластера и сравниваются с пороговым расстоянием $T$:
-   $$T = \frac{\sum_{i=1}^{K-1} \sum_{j=i+1}^{K} D(P_i, P_j)}{K(K - 1)}$$
-   Если для некоторого объекта выполняется условие $D(P_k, Y_k) \ge T$, он становится центром нового кластера ($K = K + 1$), и процедура распределения повторяется.
+Сеть Хопфилда представляет собой полносвязную искусственную нейронную сеть с обратной связью, функционирующую как ассоциативная память. Основные этапы работы алгоритма:
+1. **Обучение (Правило Хебба):** Веса синаптических связей $W_{ij}$ между нейронами вычисляются на основе обучающих эталонных образов (бинарных матриц со значениями $+1$ и $-1$):
+   $$W_{ij} = \frac{1}{P} \sum_{m=1}^{P} x_i^m x_j^m \quad (\text{при } i \neq j, \text{ а } W_{ii} = 0)$$
+   где $P$ — количество образов, а $x_i^m$ — значение $i$-го нейрона в $m$-м образе.
+2. **Функция энергии:** Сеть стремится минимизировать глобальную функцию энергии $E$:
+   $$E = -\frac{1}{2} \sum_{i=1}^{N} \sum_{j=1}^{N} W_{ij} s_i s_j$$
+   в процессе итеративного обновления состояний до достижения устойчивого состояния (аттрактора).
+3. **Распознавание зашумленного образа:** На вход подается искаженный образ. Сеть асинхронно или синхронно пересчитывает состояния нейронов по правилу активации до полной сходимости и восстановления исходного эталона.
 
 ---
 
 ## Исходные данные (`data.py`)
 
-Данные представляют собой структурированную обучающую выборку радиоэлектронных компонентов, состоящую из **12 эталонных образцов**, разделенных по физическим свойствам на две основные группы (кондиционные и склонные к деградации детали). Каждый объект описывается вектором из **3 числовых признаков**:
-1. **Отклонение сопротивления $\Delta R$ (%)**
-2. **Температурный коэффициент сопротивления ТКС ($10^{-4} \text{ 1/}^\circ\text{C}$)**
-3. **Уровень собственных шумов (мкВ/В)**
-
-Поскольку признаки имеют разную физическую размерность, модуль выполняет их предварительное масштабирование (нормализацию) к единому безразмерному диапазону $[0; 1]$ путем деления на максимальные значения по каждому столбцу:
+Модуль содержит матричные представления трех эталонных буквенных образов размерностью 5x7 (всего 35 нейронов), соответствующих инициалам («Б», «Р», «Л»). Пиксели закодированы в виде бинарных векторов со значениями $+1$ (активный пиксель) и $-1$ (фоновый элемент).
 
 ```python
-def normalize_data(matrix, test_point=None):
-    # Нахождение максимумов по каждому из 3 признаков
-    max_vals = np.max(matrix, axis=0)
-    # Приведение обучающей матрицы к диапазону [0, 1]
-    norm_matrix = matrix / max_vals
-    
-    if test_point is not None:
-        norm_test = np.array(test_point, dtype=float) / max_vals
-        return norm_matrix, norm_test, max_vals
-    return norm_matrix, max_vals
-```
+import numpy as np
 
-Также в модуле задан вектор контрольного образца `DEFAULT_TEST_OBJECT`, используемый для проверки принадлежности новой детали к сформированным кластерам.
+WIDTH = 5
+HEIGHT = 7
+
+def parse_grid(grid_str):
+    return np.array([1 if char == '#' else -1 for row in grid_str.strip().split('\n') for char in row.strip()], dtype=float)
+
+PATTERN_B = parse_grid("""
+#####
+#....
+#....
+#####
+#....
+#....
+#####
+""")
+
+PATTERN_R = parse_grid("""
+#####
+#...#
+#...#
+#####
+#..#.
+#...#
+#...#
+""")
+
+PATTERN_L = parse_grid("""
+#....
+#....
+#....
+#....
+#....
+#....
+#####
+""")
+
+TRAIN_PATTERNS = [PATTERN_B, PATTERN_R, PATTERN_L]
+PATTERN_NAMES = ["Буква Б", "Буква Р", "Буква Л"]
+```
 
 ---
 
 ## Архитектура программного комплекса
 
-Приложение разработано на языке Python с использованием модульной архитектуры, разделяющей данные, математическое ядро и графический интерфейс.
+Приложение разработано на языке Python с использованием модульной многофайловой архитектуры, разделяющей данные, математическое ядро и пользовательский интерфейс.
 
-### 1. `clustering.py` (Бизнес-логика и моделирование)
+### 1. `hopfield.py` (Бизнес-логика и моделирование)
 
-Ядро математической обработки, содержащее реализацию обоих алгоритмов кластеризации, функцию классификации новых объектов и подсчет элементарных операций для оценки вычислительной сложности.
-
-**Функция `run_kmeans` (Алгоритм K-средних)**
-Отвечает за итеративное разбиение объектов на $K$ кластеров и вычисление координат центроидов.
+Ядро математической обработки, содержащее логику синаптического обучения по правилу Хебба, функцию расчета глобальной энергии сети, итерационный процесс восстановления образов, а также генератор искажений (`add_noise`), вносящий заданный процент зашумления (инверсии пикселей).
 
 ```python
-def run_kmeans(data, k=2, max_iter=100):
-    n, m = data.shape
-    # Выбор начальных прототипов из выборки
-    indices = np.linspace(0, n - 1, k, dtype=int)
-    prototypes = data[indices].copy()
-    
-    labels = np.zeros(n, dtype=int)
-    ops_count = 0
+import numpy as np
 
-    for s in range(1, max_iter + 1):
-        # Отнесение каждого объекта к ближайшему прототипу
-        for i in range(n):
-            dists = [euclidean_distance(data[i], prototypes[c]) for c in range(k)]
-            ops_count += k * m
-            labels[i] = int(np.argmin(dists))
+class HopfieldNetwork:
+    def __init__(self, n_neurons):
+        self.n_neurons = n_neurons
+        self.weights = np.zeros((n_neurons, n_neurons))
 
-        # Пересчет новых прототипов как средних арифметических кластера
-        new_prototypes = np.zeros_like(prototypes)
-        for c in range(k):
-            cluster_points = data[labels == c]
-            if len(cluster_points) > 0:
-                new_prototypes[c] = np.mean(cluster_points, axis=0)
-            else:
-                new_prototypes[c] = prototypes[c]
-            ops_count += m
+    def train(self, patterns):
+        # Обучение сети по правилу Хебба с обнулением главной диагонали
+        self.weights = np.zeros((self.n_neurons, self.n_neurons))
+        p = len(patterns)
+        for pattern in patterns:
+            x = pattern.reshape(-1, 1)
+            self.weights += np.dot(x, x.T)
+        
+        np.fill_diagonal(self.weights, 0)
+        self.weights /= p
 
-        # Проверка условия сходимости алгоритма
-        if np.allclose(prototypes, new_prototypes, atol=1e-6):
-            break
-        prototypes = new_prototypes
+    def energy(self, state):
+        # Вычисление глобальной энергии сети Хопфилда
+        return -0.5 * np.dot(state.T, np.dot(self.weights, state))
 
-    return {
-        "labels": labels, "prototypes": prototypes, "k": k,
-        "iterations": s, "ops": ops_count,
-        "complexity": f"O(s · K · N · M) = {s} · {k} · {n} · {m} ≈ {ops_count} опер."
-    }
-```
-
-**Функция `run_maximin` (Алгоритм максимина)**
-Реализует динамический поиск числа кластеров через пороговое расстояние $T$ и выделение наиболее удаленных объектов-прототипов.
-
-```python
-def run_maximin(data):
-    n, m = data.shape
-    ops_count = 0
-
-    # Шаг 1-2: выбор P1 и наиболее удаленного от него объекта P2
-    proto_indices = [0]
-    prototypes = [data[0].copy()]
-    dists_from_p1 = [euclidean_distance(data[0], data[j]) for j in range(n)]
-    second_idx = int(np.argmax(dists_from_p1))
-    proto_indices.append(second_idx)
-    prototypes.append(data[second_idx].copy())
-
-    labels = np.zeros(n, dtype=int)
-    iterations = 0
-
-    while True:
-        iterations += 1
-        k = len(prototypes)
-
-        # Расчет порогового расстояния T между всеми парами прототипов
-        pair_dists_sum = 0.0
-        for i in range(k - 1):
-            for j in range(i + 1, k):
-                pair_dists_sum += euclidean_distance(prototypes[i], prototypes[j])
-        threshold_t = pair_dists_sum / (k * (k - 1))
-
-        # Распределение объектов по ближайшим прототипам
-        for i in range(n):
-            dists = [euclidean_distance(data[i], prototypes[c]) for c in range(k)]
-            labels[i] = int(np.argmin(dists))
-
-        # Поиск кандидатов на новый прототип (проверка условия D(Pk, Yk) >= T)
-        new_protos_added = False
-        for c in range(k):
-            cluster_indices = np.where(labels == c)[0]
-            cluster_dists = [euclidean_distance(prototypes[c], data[idx]) for idx in cluster_indices]
-            max_local_pos = int(np.argmax(cluster_dists))
+    def predict(self, noisy_pattern, max_iter=50):
+        # Синхронное обновление состояний нейронов до сходимости (до аттрактора)
+        state = noisy_pattern.copy()
+        for _ in range(max_iter):
+            prev_state = state.copy()
+            activation = np.dot(self.weights, state)
+            state = np.where(activation >= 0, 1.0, -1.0)
             
-            if cluster_dists[max_local_pos] >= threshold_t:
-                farthest_idx = int(cluster_indices[max_local_pos])
-                if farthest_idx not in proto_indices:
-                    proto_indices.append(farthest_idx)
-                    prototypes.append(data[farthest_idx].copy())
-                    new_protos_added = True
+            if np.array_equal(state, prev_state):
+                break
+        return state
 
-        if not new_protos_added:
-            break
-
-    return {
-        "labels": labels, "prototypes": np.array(prototypes),
-        "proto_indices": proto_indices, "k": len(prototypes),
-        "threshold_t": threshold_t, "iterations": iterations
-    }
+def add_noise(pattern, noise_percent):
+    # Внесение зашумления путем инверсии заданного процента пикселей
+    noisy = pattern.copy()
+    n = len(noisy)
+    n_flip = int(n * (noise_percent / 100.0))
+    
+    flip_indices = np.random.choice(n, n_flip, replace=False)
+    for idx in flip_indices:
+        noisy[idx] *= -1
+        
+    return noisy
 ```
 
 ### 2. `app.py` (Графический интерфейс пользователя - GUI и точка входа)
 
-Настольное приложение на базе библиотек **CustomTkinter** и **Matplotlib**. Обеспечивает интерактивное управление параметрами кластеризации, ввод характеристик распознаваемого объекта и трехмерную визуализацию результатов.
+Настольное приложение на базе фреймворка **CustomTkinter** и библиотеки **Matplotlib**. Позволяет интерактивно выбирать эталонный образ, настраивать процент зашумления через слайдер в диапазоне от 10% до 100%, запускать тестирование сети и наглядно визуализировать результаты в виде графической сетки.
 
-**Класс `ClusteringApp`**
-Наследуется от `ctk.CTk`, связывает интерфейс с модулями `data.py` и `clustering.py` и отрисовывает три аналитические вкладки:
-* **3D Графики кластеров:** Отображает два трехмерных графика (`projection='3d'`) в пространстве признаков $(X_1, X_2, X_3)$, где цветом выделены сформированные кластеры, маркерами `X` и `D` — найденные прототипы, а золотой звездой `*` — распознаваемый контрольный объект.
-* **Таблица распределения:** Выводит исходные и нормализованные значения признаков для всех 12 объектов, сопоставляя номера кластеров, присвоенные обоими методами.
-* **Прототипы и сложность:** Отображает точные координаты центров кластеров (в нормализованном и реальном физическом масштабе), а также сводку по итерациям и вычислительной сложности алгоритмов.
+**Класс `HopfieldApp`**
+Наследуется от `ctk.CTk`, связывает интерфейс с модулями `data.py` и `hopfield.py` и управляет графическим выводом:
 
 ```python
-class ClusteringApp(ctk.CTk):
+import customtkinter as ctk
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+import numpy as np
+
+from data import TRAIN_PATTERNS, PATTERN_NAMES, WIDTH, HEIGHT
+from hopfield import HopfieldNetwork, add_noise
+
+ctk.set_appearance_mode("Light")
+
+class HopfieldApp(ctk.CTk):
     def __init__(self):
         super().__init__()
-        self.title("Кластерный анализ: K-средних и Максимин")
-        self.raw_matrix = get_matrix()
-        self.names = get_names()
-        
+        self.title("Сеть Хопфилда: Распознавание зашумленных образов")
+        self.geometry("900x700")
+
+        self.net = HopfieldNetwork(WIDTH * HEIGHT)
+        self.net.train(TRAIN_PATTERNS)
+
+        self.selected_pattern_idx = 0
+        self.noise_percent = 20
+        self.canvas = None
+
         self.create_widgets()
-        self.run_analysis() # Первичный расчет при старте программы
+        self.run_test()
 
-    def run_analysis(self):
-        # Считывание 3 признаков контрольного объекта и параметра K со слайдера
-        test_point = [float(e.get()) for e in self.entries]
-        k_val = int(self.slider_k.get())
+    def create_widgets(self):
+        ctrl_frame = ctk.CTkFrame(self, width=280, corner_radius=15)
+        ctrl_frame.pack(side="left", fill="y", padx=20, pady=20)
+
+        ctk.CTkLabel(ctrl_frame, text="Параметры теста", font=("Helvetica", 16, "bold")).pack(pady=(20, 10))
+
+        ctk.CTkLabel(ctrl_frame, text="Выберите эталонный образ:").pack(anchor="w", padx=20)
+        self.pattern_var = ctk.StringVar(value=PATTERN_NAMES[0])
+        for i, name in enumerate(PATTERN_NAMES):
+            btn = ctk.CTkRadioButton(ctrl_frame, text=name, variable=self.pattern_var, value=name, command=self.update_pattern)
+            btn.pack(anchor="w", padx=30, pady=2)
+
+        ctk.CTkLabel(ctrl_frame, text="Процент зашумления: 20%", font=("Helvetica", 12, "bold")).pack(anchor="w", padx=20, pady=(15, 0))
+        self.slider_noise = ctk.CTkSlider(ctrl_frame, from_=10, to=100, number_of_steps=18, command=self.update_noise)
+        self.slider_noise.set(20)
+        self.slider_noise.pack(padx=20, pady=5, fill="x")
+
+        self.lbl_noise = ctk.CTkLabel(ctrl_frame, text="Текущий шум: 20%")
+        self.lbl_noise.pack(anchor="w", padx=20)
+
+        btn_run = ctk.CTkButton(ctrl_frame, text="Запустить распознавание", font=("Helvetica", 14, "bold"), command=self.run_test)
+        btn_run.pack(pady=30, padx=20, fill="x")
+
+        self.right_frame = ctk.CTkFrame(self, corner_radius=15)
+        self.right_frame.pack(side="right", fill="both", expand=True, padx=(0, 20), pady=20)
+
+        self.result_text = ctk.CTkTextbox(self.right_frame, font=("Consolas", 13), height=150)
+        self.result_text.pack(padx=20, pady=20, fill="x")
+
+        self.graph_container = ctk.CTkFrame(self.right_frame, fg_color="transparent")
+        self.graph_container.pack(fill="both", expand=True, padx=20, pady=(0, 20))
+
+    def update_pattern(self):
+        name = self.pattern_var.get()
+        self.selected_pattern_idx = PATTERN_NAMES.index(name)
+        self.run_test()
+
+    def update_noise(self, val):
+        self.noise_percent = int(val)
+        self.lbl_noise.configure(text=f"Текущий шум: {self.noise_percent}%")
+        self.run_test()
+
+    def run_test(self):
+        original = TRAIN_PATTERNS[self.selected_pattern_idx]
+        noisy = add_noise(original, self.noise_percent)
+        recovered = self.net.predict(noisy)
+
+        is_correct = np.array_equal(original, recovered)
         
-        # Нормализация данных и запуск обоих алгоритмов кластеризации
-        norm_matrix, norm_test, max_vals = normalize_data(self.raw_matrix, test_point)
-        km_res = run_kmeans(norm_matrix, k=k_val)
-        mm_res = run_maximin(norm_matrix)
+        info = f"Результат тестирования для [{PATTERN_NAMES[self.selected_pattern_idx]}] при шуме {self.noise_percent}%:\n"
+        info += f"• Статус распознавания: {'ВЕРНО (Образ восстановлен)' if is_correct else 'ОШИБКА (Ложный аттрактор)'}\n"
+        info += f"• Энергия исходного образа: {self.net.energy(original):.2f}\n"
+        info += f"• Энергия восстановленного: {self.net.energy(recovered):.2f}"
 
-        # Классификация нового объекта по ближайшему прототипу
-        km_cluster, km_dists = classify_point(norm_test, km_res["prototypes"])
-        mm_cluster, mm_dists = classify_point(norm_test, mm_res["prototypes"])
+        self.result_text.delete("1.0", "end")
+        self.result_text.insert("1.0", info)
 
-        # Обновление 3D-графиков и таблиц интерфейса
-        self.draw_graphs(norm_matrix, norm_test, km_res, mm_res, km_cluster, mm_cluster)
-        self.populate_table(norm_matrix, km_res, mm_res)
-        self.populate_prototypes(km_res, mm_res, max_vals)
+        if self.canvas:
+            self.canvas.get_tk_widget().destroy()
+
+        fig, axes = plt.subplots(1, 3, figsize=(6, 3), dpi=100)
+        images = [
+            (original, "Эталон"),
+            (noisy, f"Шум {self.noise_percent}%"),
+            (recovered, "Восстановленный")
+        ]
+
+        for ax, (img, title) in zip(axes, images):
+            ax.imshow(img.reshape(HEIGHT, WIDTH), cmap='binary', vmin=-1, vmax=1)
+            ax.set_title(title, fontsize=10)
+            ax.set_xticks([])
+            ax.set_yticks([])
+
+        fig.tight_layout()
+        self.canvas = FigureCanvasTkAgg(fig, master=self.graph_container)
+        self.canvas.draw()
+        self.canvas.get_tk_widget().pack(fill="both", expand=True)
 
 if __name__ == "__main__":
-    app = ClusteringApp()
+    app = HopfieldApp()
     app.mainloop()
 ```
